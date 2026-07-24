@@ -1,26 +1,32 @@
 ---
 name: "module"
 title: "Facets Module Generator (fine-tuned LLM)"
-description: "Generate Facets IaC modules (facets.yaml + Terraform) by querying the Facets fine-tuned model served on RunPod. Use when the user runs /module followed by what they want, or asks to draft a Facets module, facets.yaml, or module skeleton using the Facets LLM."
-triggers: ["module", "facets.yaml", "facets llm"]
+description: "Generate Facets IaC modules (facets.yaml + Terraform) by querying the Facets fine-tuned model served on RunPod. Use when the user runs /module followed by what they want."
+disable-model-invocation: true
+triggers: ["module"]
 category: "development"
 tags: ["iac", "terraform", "facets-yaml", "module-development", "llm"]
 icon: "🧱"
-version: "1.0"
+version: "1.1"
 ---
 
 # Facets Module Generator
 
-Queries the company's fine-tuned Facets model (Qwen3.6-35B `qwen36-facets-nothink`, served on RunPod serverless) to draft Facets IaC modules. The model is trained on the Facets module repository: facets.yaml conventions, module standards, output types, and validation rules.
+Queries the company's fine-tuned Facets model (Qwen3.6-35B `qwen36-facets-nothink`,
+RunPod queue-based serverless) to draft Facets IaC modules. The model is trained on
+the Facets module repository: facets.yaml conventions, module standards, output
+types, and validation rules.
 
 ## Configuration
 
-Two environment variables (employees get these from the platform team):
+Two environment variables (values from the platform team). `jq` and `curl` must be
+installed (preflight: `command -v jq curl`).
 
 - `FACETS_LLM_ENDPOINT` — RunPod endpoint id (current: `t77jarug59nzvk`)
-- `FACETS_LLM_KEY` — team inference API key (RunPod key)
+- `FACETS_LLM_KEY` — inference API key
 
-If either is missing, stop and show the user this setup snippet instead of calling the API:
+If either env var is missing, stop and show the user this snippet instead of calling
+the API (they must restart their session after adding it):
 
 ```bash
 # add to ~/.zshrc — values from the platform team (#platform-eng)
@@ -30,21 +36,22 @@ export FACETS_LLM_KEY="<team-inference-key>"
 
 ## Procedure
 
-1. **Build the request.** Use the user's prompt (the text after `/module`) as the user message, verbatim plus any concrete requirements they stated earlier in the conversation (cloud, intent name, flavor, inputs). Keep it short and specific — the model was trained on direct instructions, NOT on long context dumps. Do NOT paste repository files into the prompt.
+1. **Build the prompt.** Use ONLY the text the user passed after `/module` as the
+   request. Do not add earlier conversation content unless the user explicitly asks
+   you to include specific stated requirements — and never include anything that
+   looks like credentials or customer data. Keep it short and direct (the model was
+   trained on direct instructions, not context dumps). Do NOT paste repository files.
 
-2. **Use EXACTLY this system prompt** (the model was fine-tuned with it; changing it degrades output):
+2. **Write the prompt to a temp file** (never interpolate user text into shell):
+   use the Write tool to create `/tmp/facets-module-prompt.txt` containing exactly
+   the prompt text.
 
-   ```
-   You help developers write and review Facets IaC modules. Follow the Facets module conventions precisely.
-   ```
-
-3. **Call the endpoint** (RunPod queue API, synchronous). Cold start note: if no
-   worker is warm, the job waits in the queue while one boots (typically 2–8 min;
-   the request below blocks until done). Tell the user it's warming up if the
-   first call is slow.
+3. **Submit and poll.** Run this as ONE Bash script (it is injection-safe: the
+   prompt enters via `--rawfile`):
 
    ```bash
-   jq -n --arg prompt "<USER PROMPT HERE>" '{
+   set -eu
+   REQ=$(jq -n --rawfile prompt /tmp/facets-module-prompt.txt '{
      input: {
        model: "qwen36-facets-nothink",
        temperature: 0.7, top_p: 0.95, max_tokens: 4096,
@@ -54,27 +61,50 @@ export FACETS_LLM_KEY="<team-inference-key>"
          {role: "user", content: $prompt}
        ]
      }
-   }' | curl -sS --max-time 900 -X POST \
+   }')
+   R=$(printf '%s' "$REQ" | curl -sS --max-time 120 -X POST \
      "https://api.runpod.ai/v2/$FACETS_LLM_ENDPOINT/runsync" \
      -H "Authorization: Bearer $FACETS_LLM_KEY" \
-     -H "Content-Type: application/json" -d @- \
-   | jq -r '.output.choices[0].message.content // ("ERROR: " + (.|tostring))'
+     -H "Content-Type: application/json" -d @-)
+   JID=$(printf '%s' "$R" | jq -r '.id // empty')
+   STATUS=$(printf '%s' "$R" | jq -r '.status // "UNKNOWN"')
+   DEADLINE=$(( $(date +%s) + 900 ))
+   while [ "$STATUS" = "IN_QUEUE" ] || [ "$STATUS" = "IN_PROGRESS" ]; do
+     [ $(date +%s) -gt $DEADLINE ] && { echo "TIMED OUT after 15 min (job $JID)"; exit 1; }
+     sleep 15
+     R=$(curl -sS --max-time 60 -H "Authorization: Bearer $FACETS_LLM_KEY" \
+       "https://api.runpod.ai/v2/$FACETS_LLM_ENDPOINT/status/$JID")
+     STATUS=$(printf '%s' "$R" | jq -r '.status // "UNKNOWN"')
+   done
+   if [ "$STATUS" = "COMPLETED" ]; then
+     printf '%s' "$R" | jq -r '.output.choices[0].message.content // ("EMPTY OUTPUT: " + (.output|tostring))'
+   else
+     echo "JOB $STATUS:"; printf '%s' "$R" | jq -c '.error // .' | head -c 500
+     exit 1
+   fi
    ```
 
-   If the response has `"status": "IN_QUEUE"` or `"IN_PROGRESS"` instead of output
-   (runsync returns early after ~90s), poll
-   `https://api.runpod.ai/v2/$FACETS_LLM_ENDPOINT/status/<id>` every 15s until
-   COMPLETED, then read `.output.choices[0].message.content`.
+   Cold start: if the first poll cycles show IN_QUEUE for a few minutes, tell the
+   user a GPU worker is booting (~3–8 min from cold) — this is normal and the job
+   will complete.
 
-4. **Present the result** as the model's draft, clearly labeled as coming from the Facets LLM. If the user wants the files, write them into the proper repo layout (`modules/{intent}/{flavor}/{version}/`).
+4. **Present the result** as the model's draft, clearly labeled as coming from the
+   Facets LLM. Only write files if the user asks AND you are inside the Facets
+   module repository (verify markers like `rules.md` and `modules/` exist at the
+   repo root first); then use the proper layout `modules/{intent}/{flavor}/{version}/`.
+   Otherwise present the draft as text or ask for a target path.
 
-5. **Always validate before calling it done.** The draft is a starting point, not a finished module:
-   - If in the module repo, run `raptor create iac-module -f <module-path> --dry-run` and report results.
-   - Check the new-module checklist (icon, project-type entry, catalog page) from the repo CLAUDE.md.
-   - Review against `rules.md` — the model does NOT reliably recall rules by RULE-number; verify rule references by grepping `rules.md` yourself.
+5. **Always validate before calling it done.** The draft is a starting point:
+   - In the module repo, run `raptor create iac-module -f <module-path> --dry-run`
+     and report results.
+   - Check the new-module checklist (icon, project-type entry, catalog page) from
+     the repo CLAUDE.md.
+   - Verify any RULE-number references by grepping `rules.md` yourself — the model
+     does NOT reliably recall rules by number.
 
 ## Known model limits (set expectations)
 
-- No knowledge of raptor CLI specifics — don't ask it raptor command questions; use `/raptor` skills instead.
-- RULE-number ↔ rule-text bindings are unreliable; content knowledge is good, numbered citations are not.
-- Single-shot drafting is its strength; it is not an agentic tool-user. Keep Claude in charge of file writes, validation, and iteration.
+- No knowledge of the raptor CLI — don't ask it raptor questions; use `/raptor` skills.
+- RULE-number ↔ rule-text bindings are unreliable; content knowledge is good.
+- Single-shot drafting is its strength; Claude stays in charge of file writes,
+  validation, and iteration.
