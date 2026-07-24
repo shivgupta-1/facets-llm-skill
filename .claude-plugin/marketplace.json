@@ -1,0 +1,19 @@
+{
+  "name": "facets-llm",
+  "owner": {"name": "Shiv Gupta", "email": "shivg03@gmail.com"},
+  "metadata": {
+    "description": "Facets fine-tuned LLM skills — /module generates Facets IaC modules via the team's RunPod-served model.",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "module",
+      "source": "./",
+      "strict": false,
+      "skills": ["./skills/module"],
+      "description": "Generate Facets IaC modules (facets.yaml + Terraform) via the fine-tuned Facets model on RunPod serverless. Run /module followed by what you want; Claude drafts via the LLM and validates with raptor before finishing.",
+      "category": "development",
+      "tags": ["iac", "terraform", "facets-yaml", "module-development", "llm"]
+    }
+  ]
+}
