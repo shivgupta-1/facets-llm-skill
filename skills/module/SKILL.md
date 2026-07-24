@@ -22,7 +22,7 @@ types, and validation rules.
 Two environment variables (values from the platform team). `jq` and `curl` must be
 installed (preflight: `command -v jq curl`).
 
-- `FACETS_LLM_ENDPOINT` — RunPod endpoint id (current: `t77jarug59nzvk`)
+- `FACETS_LLM_ENDPOINT` — RunPod endpoint id (current: `2xd61lauejq03o`)
 - `FACETS_LLM_KEY` — inference API key
 
 If either env var is missing, stop and show the user this snippet instead of calling
@@ -30,7 +30,7 @@ the API (they must restart their session after adding it):
 
 ```bash
 # add to ~/.zshrc — values from the platform team (#platform-eng)
-export FACETS_LLM_ENDPOINT="t77jarug59nzvk"
+export FACETS_LLM_ENDPOINT="2xd61lauejq03o"
 export FACETS_LLM_KEY="<team-inference-key>"
 ```
 

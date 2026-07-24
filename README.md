@@ -17,7 +17,7 @@ from a fresh shell** so both the plugin and the env vars load:
 
 ```bash
 # ~/.zshrc
-export FACETS_LLM_ENDPOINT="t77jarug59nzvk"
+export FACETS_LLM_ENDPOINT="2xd61lauejq03o"
 export FACETS_LLM_KEY="<team inference key>"
 ```
 
