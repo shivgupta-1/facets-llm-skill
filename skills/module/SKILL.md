@@ -6,7 +6,7 @@ triggers: ["module", "facets.yaml", "facets module"]
 category: "development"
 tags: ["iac", "terraform", "facets-yaml", "module-development", "llm"]
 icon: "🧱"
-version: "1.3"
+version: "1.4"
 ---
 
 # Facets Module Generator
@@ -35,6 +35,11 @@ If either is missing, stop and show this snippet (restart session after adding):
 export FACETS_LLM_ENDPOINT="2xd61lauejq03o"
 export FACETS_LLM_KEY="<team-inference-key>"
 ```
+
+**Cost & courtesy:** every call spends GPU time on an endpoint the whole team
+shares. One call per module draft is the intended budget — do not loop retries
+against the endpoint. If a call comes back unusable, fall back to authoring the
+yaml yourself (step 1) instead of calling again.
 
 ## Procedure
 
@@ -108,9 +113,18 @@ fi
 Cold start: first call after idle can wait minutes in IN_QUEUE — tell the
 user a GPU worker is booting; it will complete.
 
-**Degenerate-output check:** if the response is empty, a bare file tree, or
-truncated mid-YAML, do NOT retry with more context. Author the facets.yaml
-yourself from the exemplar module and continue.
+**Degenerate-output check:** treat the draft as unusable if it is
+
+- empty,
+- a bare file tree,
+- truncated mid-YAML,
+- YAML that fails to parse,
+- mostly prose (commentary/explanation) rather than a yaml document, or
+- under ~20 lines — a real facets.yaml is never that short.
+
+In every one of those cases do NOT retry the endpoint and do NOT re-call it
+with more context. Author the facets.yaml yourself from the exemplar module,
+say so to the user, and continue with step 2.
 
 ### 2. Correct the draft against ground truth (you, not the model)
 
@@ -119,23 +133,43 @@ read in step 0:
 
 - Replace every input/output `type:` with a real registered type; if none
   fits, flag it to the user rather than inventing one.
-- Read the corrected input types' schemas — downstream Terraform must only
-  dereference `var.inputs.<name>.attributes.<path>` paths that actually
-  exist in those schemas.
+- **Attribute checklist (hard requirement).** For each corrected input type,
+  open its schema file under `outputs/{type-name}/` and enumerate the
+  attribute paths it actually exposes. Keep that enumeration as a scratch list
+  (one line per `<input-name>` → allowed `attributes.<path>` values) and carry
+  it into step 3: every `var.inputs.<name>.attributes.<path>` dereference you
+  write into Terraform must appear on the list. Do not rely on memory of what
+  a type "usually" has — read the schema.
+- If an attribute the module genuinely needs does not exist on any registered
+  output type, **STOP** and tell the user (name the input, the missing path,
+  and the types you checked). Never invent a path to make the module compile.
 - Fix `sample.kind` (= intent), `intentDetails` (RULE-021), and make
   `iac.validated_files` list exactly the files you will actually create.
 
 ### 3. Author the Terraform yourself
 
-Write `variables.tf`, `main.tf`, `locals.tf`, `outputs.tf` (and
-`variables_outputs.tf`/`providers.tf` if the exemplar convention uses them)
-directly, following the exemplar module's current conventions:
+Write the Terraform directly, following the exemplar module's current
+conventions:
 
+- **Decide the file set from the exemplar, not from habit.** The usual set is
+  `variables.tf`, `main.tf`, `locals.tf`, `outputs.tf`, but some intents also
+  carry `variables_outputs.tf` and/or `providers.tf`. `ls` the exemplar module
+  directory, match its file set, and make the facets.yaml
+  `iac.validated_files` list agree exactly with the files you create — no
+  extras, no omissions.
+- **Decide the wiring location from the exemplar too.** Check whether the
+  exemplar defines `output_attributes`/`output_interfaces` in `locals.tf` or in
+  `outputs.tf`, define them in exactly ONE file, and after writing, grep the
+  generated files (e.g. `grep -rn 'output_attributes\|output_interfaces'`) to
+  assert there is no duplicate definition.
 - `variables.tf`: `var.instance` typed from the spec schema; `var.inputs`
   typed from the corrected input types' real schemas.
-- `locals.tf` vs `outputs.tf`: put `output_attributes`/`output_interfaces`
-  wherever the exemplar puts them — never define them in both files.
-- Only reference input attribute paths verified in step 2.
+- Only reference input attribute paths that appear on the step 2 scratch list.
+- **Coherence pass (after all files are written).** Re-read the file set as a
+  whole and confirm: every `local.*` referenced is actually defined; every
+  `var.*` referenced is declared in `variables.tf`/`variables_outputs.tf`; and
+  no file still references content you removed or relocated while editing
+  another file. Fix before running validation.
 
 ### 4. Validate
 
