@@ -6,7 +6,7 @@ triggers: ["module", "facets.yaml", "facets module"]
 category: "development"
 tags: ["iac", "terraform", "facets-yaml", "module-development", "llm"]
 icon: "🧱"
-version: "1.4"
+version: "1.4.1"
 ---
 
 # Facets Module Generator
@@ -116,14 +116,15 @@ fi
 Cold start: first call after idle can wait minutes in IN_QUEUE — tell the
 user a GPU worker is booting; it will complete.
 
-**Degenerate-output check:** treat the draft as unusable if it is
+**Degenerate-output check.** First strip ONE optional Markdown fence if the
+whole response is wrapped in ```yaml ... ``` (that wrapper alone is fine).
+Then treat the draft as unusable if ANY of these hold:
 
-- empty,
-- a bare file tree,
-- truncated mid-YAML,
-- YAML that fails to parse,
-- mostly prose (commentary/explanation) rather than a yaml document, or
-- under ~20 lines — a real facets.yaml is never that short.
+- it is empty, or a bare file tree / list of filenames,
+- it does not parse as YAML, or parses to something other than a mapping,
+- the parsed mapping is missing any of the expected top-level keys:
+  `intent`, `flavor`, `version`, `spec`,
+- it is visibly truncated (ends mid-key or mid-block).
 
 In every one of those cases do NOT retry the endpoint and do NOT re-call it
 with more context. Then branch: **inside the module repo**, author the
