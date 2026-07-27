@@ -6,7 +6,7 @@ triggers: ["module", "facets.yaml", "facets module"]
 category: "development"
 tags: ["iac", "terraform", "facets-yaml", "module-development", "llm"]
 icon: "🧱"
-version: "2.1"
+version: "2.2"
 ---
 
 # Facets Module Generator
@@ -37,9 +37,11 @@ export FACETS_LLM_ENDPOINT="2xd61lauejq03o"
 export FACETS_LLM_KEY="<team-inference-key>"
 ```
 
-**Cost note:** a full module is ~6–12 endpoint calls (generation + fix rounds)
-— that is the intended budget. Per-file fix rounds are capped at 2; beyond
-that, ask the user instead of looping the endpoint.
+**Cost note:** a full module is ~6 endpoint calls on the happy path and up to
+~18 worst-case (every cap exhausted). Each file has a TOTAL budget of 2 fix
+calls across ALL steps (generation review + raptor failures combined); the
+facets.yaml reconcile in step 3 gets exactly 1. When any budget is exhausted,
+ask the user — never loop the endpoint.
 
 ## The endpoint call (reusable)
 
@@ -106,7 +108,12 @@ Inside the repo, read BEFORE calling (so endpoint calls run back-to-back):
 
 1. **Type-to-schema map**: `grep -H '^name:' outputs/*/outputs.yaml` — the
    declared `@facets/...` name → schema path (directory names diverge from
-   type names; never guess paths).
+   type names; never guess paths). **Sanity-check the map before trusting
+   it**: it must be non-empty and must contain at least one type you can see
+   used by an existing module (e.g. grep a module's facets.yaml for its input
+   type and confirm the map resolves it). An empty or partial map means the
+   glob missed the layout (nested dirs, `.yml`, quoted keys) — adapt the
+   search; never run the STOP rule against a map you haven't sanity-checked.
 2. Schemas of likely-relevant types; enumerate their `attributes.*` and
    `interfaces.*` paths with types (scalar/list/map) as a scratch checklist.
 3. One **exemplar module** of similar intent: its top-level `*.tf` file set
@@ -124,6 +131,16 @@ YAML mapping, missing any of `intent`/`flavor`/`version`/`spec`, or visibly
 truncated. Degenerate → ONE retry via the same call; still degenerate → ask
 the user whether you may author it yourself.
 
+**On acceptance, build the SHAPE TABLE** (this makes every later check
+executable): one row per spec field — spec declaration → expected HCL type →
+legal access operators. Translation rules: JSON-Schema `array` → `list(...)`
+(operators: index `[n]`, `for`, `length`); `patternProperties`/
+`additionalProperties` object → `map(...)` (operators: key lookup, `lookup()`,
+`for k,v`, `keys()`); fixed-`properties` object → `object({...})` with the
+EXACT field set (operators: attribute access only). Add one row per step-0
+input attribute/interface path with its schema type. Every landing file is
+checked against this table.
+
 **Review** (you): every input/output `type:` must exist in the type map;
 `sample.kind` = intent; `intentDetails` per RULE-021. Anything wrong → **fix
 dialect** call(s), max 2, e.g. "replace input type `@facets/foo` with
@@ -134,10 +151,16 @@ types checked).
 ### 2. Terraform files (endpoint, one call per file, exemplar order)
 
 For each file in the exemplar's file set, call with that file's exact
-dialect. If the exemplar wires outputs in `outputs.tf` without a `locals.tf`,
-skip the locals.tf call and request outputs.tf via the fix dialect against
-the facets.yaml ("write outputs.tf defining output_attributes and
-output_interfaces for this module") — and review it extra carefully.
+dialect. **If the exemplar wires outputs in `outputs.tf` without a
+`locals.tf`:** there is NO trained dialect for outputs.tf-from-facets.yaml
+(training only ever paired outputs.tf with a locals.tf). Treat this as an
+experimental off-dialect call with a budget of 1: attempt it once via the
+fix dialect against the facets.yaml; if the result fails any check, do not
+retry — ask the user whether you may author that one file yourself.
+
+Write each ACCEPTED file immediately to a staging directory
+(`mktemp -d` at step start) so whole-set checks can run as files accumulate;
+step 3 moves the set into `modules/...` at the end.
 
 **Per-file degenerate check:** the response must contain the expected
 top-level HCL block (`variable`/`resource`/`data`/`locals`/`output`) with
@@ -145,28 +168,49 @@ actual assignments — commentary-only responses, empty blocks, or unclosed
 braces are degenerate. Degenerate or review-failing → **fix dialect** with a
 precise issue list (e.g. "the file contains only comments; produce the
 actual locals block with output_attributes and output_interfaces
-assignments"), max 2 rounds per file.
+assignments").
+
+**Fix-loop rules (apply to EVERY fix call in any step):**
+- Every fix output re-enters the FULL landing review: degenerate check,
+  checklist, shape table, semantic-values check. A fix that introduces a new
+  failure consumes the file's budget like any other round.
+- Budget: 2 fix calls TOTAL per file across steps 2–4 combined. Exhausted →
+  present the remaining issue and ask the user whether you may author or
+  hand-edit that file yourself. This escape applies to every path.
+- If ANY fix changes an already-accepted upstream file (e.g. variables.tf
+  retyped during the raptor loop), re-run the shape and coherence checks on
+  every downstream file in the staging dir — this costs zero endpoint calls
+  — and route any new failures through their remaining budgets.
 
 **Per-file review checklist (you):** every `var.inputs.<n>.attributes.<p>` /
 `.interfaces.<p>` dereference appears on the step-0 checklist (indexing only
 beneath list/map paths); every `local.*` referenced is defined; every
 `var.*` declared; wiring defined in exactly ONE file
-(`grep -En '^\s*(output_attributes|output_interfaces)\s*=' <module>/*.tf`
-must show exactly one assignment each, in the convention file).
+(`grep -En '^\s*(output_attributes|output_interfaces)\s*=' <staging-dir>/*.tf`
+must show exactly one assignment each, in the convention file; re-run it in
+step 3 after the final write to `modules/...`).
 
 **Type-shape consistency (hard requirement — checked on EVERY file as it
-lands, not just at the end):** the facets.yaml `spec` schema is the single
-source of truth for the shape of `var.instance`. Verify structurally:
-arrays in the spec stay `list(...)` in variables.tf, maps stay `map(...)`,
-objects stay `object({...})` — and main.tf/locals.tf access the field the
-same way variables.tf typed it (no `lookup()` on lists, no `[0]` on maps).
-A shape mismatch is a review failure → fix-dialect call on the offending
-file quoting BOTH the spec fragment and the mismatched declaration, e.g.
-"variables.tf types `databases` as `map(object)` but the facets.yaml spec
-declares an array — retype it as `list(object({...}))` to match the spec."
-Also reject any outputs.tf that re-assigns `output_attributes`/
-`output_interfaces` when another file already carries them, or that assigns
-a symbol to itself (circular reference).
+lands AND on every fix output):** diff the file's declarations and accesses
+against the step-1 SHAPE TABLE. Failures include: variables.tf typing a
+field differently than the table; any access using an operator not legal
+for the table's type — `lookup()`/`keys()`/`for k,v`/`for_each` on a list,
+`[0]`/splat on a map, `object({...})` field sets that don't match the spec's
+exact fields; and any `var.inputs...` access whose operator doesn't match
+the input attribute's schema type. Quote both sides in the fix call (inline
+in the issue text — inline quotes are not fences and don't violate the
+pairing rule), e.g. "variables.tf types `databases` as `map(object)` but
+the facets.yaml spec declares an array — retype it as `list(object({...}))`."
+Also reject: outputs.tf re-assigning `output_attributes`/`output_interfaces`
+when another file already carries them; any symbol assigned to itself
+(circular reference).
+
+**Semantic-values check (hard requirement):** any credential, secret,
+password, token, or connection-string field in `output_attributes`/
+`output_interfaces` must trace to a resource attribute, a verified
+`var.inputs...` path, or a secret reference — NEVER a literal string or an
+unrelated field (a fix round once assigned an instance NAME as a credential;
+shape checks cannot catch this class).
 
 ### 3. Assemble and reconcile
 
@@ -177,7 +221,11 @@ to correct it.
 
 ### 4. Validate
 
-`raptor create iac-module -f <module-path> --dry-run`. Failures → fix-dialect
+Verify the validation command against the installed raptor first
+(`raptor --help`; the expected form is `raptor create iac-module -f
+<module-path> --dry-run`, but confirm before the first run). Failures:
+summarize each raptor error into ONE plain-language issue scoped to ONE file
+(never paste raw multi-file/ANSI error dumps into the fix prompt) → fix-dialect
 call on the offending file with raptor's error text as the issue (max 2
 rounds per file), then re-run. Still failing → present the remaining errors
 and ask the user whether you may fix directly. Report security-scan findings
@@ -187,9 +235,11 @@ RULE-number claims.
 
 ## Known model limits
 
-- Strongest at facets.yaml; per-file Terraform verified good on real-module
-  context (probed 2026-07-27) but degrades on synthetic/oversized context —
-  hence the strict dialect pairings.
+- Strongest at facets.yaml. Probed on real-module context (2026-07-27):
+  variables.tf, main.tf, and the fix dialect verified good; locals.tf
+  degenerated into commentary on the first try (recovered by one fix round in
+  field testing). Degrades on synthetic or oversized context — hence the
+  strict dialect pairings and the degenerate checks.
 - Invents `@facets/` type names and attribute paths — hence the step-0
   checklist; never trust, always verify.
 - No raptor CLI knowledge; hallucinates raptor commands confidently.
