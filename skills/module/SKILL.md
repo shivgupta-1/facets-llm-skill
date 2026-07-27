@@ -38,8 +38,8 @@ export FACETS_LLM_KEY="<team-inference-key>"
 
 **Cost & courtesy:** every call spends GPU time on an endpoint the whole team
 shares. One call per module draft is the intended budget — do not loop retries
-against the endpoint. If a call comes back unusable, fall back to authoring the
-yaml yourself (step 1) instead of calling again.
+against the endpoint. If the call comes back unusable, use the fallback at the
+end of step 1 (author the yaml yourself where possible) instead of calling again.
 
 ## Procedure
 
@@ -48,11 +48,14 @@ yaml yourself (step 1) instead of calling again.
 Determine if you are inside the Facets module repository (markers: `rules.md`,
 `modules/`, `outputs/` at repo root).
 
-- **Inside the repo:** read, BEFORE calling the endpoint (so endpoint calls
-  run back-to-back and pay at most one cold start): the list of real output
-  types (`ls outputs/`), the schema files of any types likely relevant to the
-  request, and one exemplar module of a similar intent
-  (`modules/<similar>/...`) for current file-layout and wiring conventions.
+- **Inside the repo:** read, BEFORE calling the endpoint (so the single
+  endpoint call pays at most one cold start): (a) the **type-to-schema map** —
+  the directory name under `outputs/` is NOT always the type name, so build the
+  map from ground truth: `grep -H '^name:' outputs/*/outputs.yaml` and record
+  each declared `@facets/...` name → its `outputs.yaml` path (a type must match
+  exactly one entry); (b) the schema files of types likely relevant to the
+  request; (c) one exemplar module of a similar intent (`modules/<similar>/...`)
+  for current file-layout and wiring conventions.
 - **Outside the repo (degraded mode):** you may still run step 1, but you MUST
   mark every `@facets/` type in the result with `# UNVERIFIED — check against
   outputs/ registry`, tell the user validation was impossible, and stop after
@@ -123,8 +126,11 @@ user a GPU worker is booting; it will complete.
 - under ~20 lines — a real facets.yaml is never that short.
 
 In every one of those cases do NOT retry the endpoint and do NOT re-call it
-with more context. Author the facets.yaml yourself from the exemplar module,
-say so to the user, and continue with step 2.
+with more context. Then branch: **inside the module repo**, author the
+facets.yaml yourself from the exemplar module, say so to the user, and
+continue with step 2. **Outside the repo (degraded mode)**, report the
+unusable response and stop — do not fabricate a facets.yaml or Terraform
+without the registry.
 
 ### 2. Correct the draft against ground truth (you, not the model)
 
@@ -134,34 +140,39 @@ read in step 0:
 - Replace every input/output `type:` with a real registered type; if none
   fits, flag it to the user rather than inventing one.
 - **Attribute checklist (hard requirement).** For each corrected input type,
-  open its schema file under `outputs/{type-name}/` and enumerate the
-  attribute paths it actually exposes. Keep that enumeration as a scratch list
-  (one line per `<input-name>` → allowed `attributes.<path>` values) and carry
-  it into step 3: every `var.inputs.<name>.attributes.<path>` dereference you
-  write into Terraform must appear on the list. Do not rely on memory of what
-  a type "usually" has — read the schema.
+  open its schema file via the step-0 type-to-schema map (NOT by guessing
+  `outputs/<type-name>/` — directory names and type names diverge) and
+  enumerate BOTH the `attributes.*` and `interfaces.*` paths it exposes,
+  recording each path's schema type (scalar / list / map / object). Keep that
+  as a scratch list per input and carry it into step 3: every
+  `var.inputs.<name>.attributes.<path>` or `var.inputs.<name>.interfaces.<path>`
+  dereference you write must correspond to a listed path — indexing or map
+  keys (`[0]`, `["key"]`) are allowed only beneath a listed list/map property.
+  Do not rely on memory of what a type "usually" has — read the schema.
 - If an attribute the module genuinely needs does not exist on any registered
   output type, **STOP** and tell the user (name the input, the missing path,
   and the types you checked). Never invent a path to make the module compile.
-- Fix `sample.kind` (= intent), `intentDetails` (RULE-021), and make
-  `iac.validated_files` list exactly the files you will actually create.
+- Fix `sample.kind` (= intent) and `intentDetails` (RULE-021). Leave
+  `iac.validated_files` for the end of step 3, after the file set is decided.
 
 ### 3. Author the Terraform yourself
 
 Write the Terraform directly, following the exemplar module's current
 conventions:
 
-- **Decide the file set from the exemplar, not from habit.** The usual set is
-  `variables.tf`, `main.tf`, `locals.tf`, `outputs.tf`, but some intents also
-  carry `variables_outputs.tf` and/or `providers.tf`. `ls` the exemplar module
-  directory, match its file set, and make the facets.yaml
-  `iac.validated_files` list agree exactly with the files you create — no
-  extras, no omissions.
+- **Decide the Terraform file set FIRST, from the exemplar as a convention
+  baseline.** The usual set is `variables.tf`, `main.tf`, `locals.tf`,
+  `outputs.tf`; some intents also carry `variables_outputs.tf` and/or
+  `providers.tf`. Consider only top-level `*.tf` files in the exemplar —
+  ignore README/docs/YAML/assets. Once decided, set the facets.yaml
+  `iac.validated_files` to exactly the `.tf` files you will create — every
+  created top-level `.tf` listed, no extras, no omissions.
 - **Decide the wiring location from the exemplar too.** Check whether the
   exemplar defines `output_attributes`/`output_interfaces` in `locals.tf` or in
-  `outputs.tf`, define them in exactly ONE file, and after writing, grep the
-  generated files (e.g. `grep -rn 'output_attributes\|output_interfaces'`) to
-  assert there is no duplicate definition.
+  `outputs.tf`, define them in exactly ONE file, and after writing, check
+  assignments only (references and comments don't count):
+  `grep -En '^\s*(output_attributes|output_interfaces)\s*=' <module-path>/*.tf`
+  — require exactly one assignment line for EACH of the two symbols.
 - `variables.tf`: `var.instance` typed from the spec schema; `var.inputs`
   typed from the corrected input types' real schemas.
 - Only reference input attribute paths that appear on the step 2 scratch list.

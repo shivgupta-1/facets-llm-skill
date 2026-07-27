@@ -9,10 +9,13 @@ and validates with raptor. Best used inside the Facets module repository.
 
 1. The fine-tune is called **once** and drafts only the `facets.yaml` spec — it
    never writes Terraform, and it invents `@facets/` type names.
-2. Your Claude corrects that spec against the real `outputs/` type registry and
-   the input-type schemas, then authors every Terraform file itself.
-3. Your Claude validates the result with `raptor create iac-module --dry-run`
-   and reports what still needs your attention.
+2. Inside the Facets module repo, your Claude corrects that spec against the
+   real `outputs/` type registry and the input-type schemas, then authors every
+   Terraform file itself. (Outside the repo — or if a required type/attribute
+   isn't registered — it reports the blocker and stops instead of guessing.)
+3. Your Claude validates the result with
+   `raptor create iac-module -f <module-path> --dry-run` and reports what
+   still needs your attention.
 
 ## Install (once)
 
