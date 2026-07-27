@@ -1,21 +1,22 @@
 # facets-llm — Claude Code skills for the Facets fine-tuned model
 
-`/module <what you want>` drafts a Facets IaC module via guided multi-step
-generation: the team's fine-tuned model drafts the facets.yaml (its specialty),
-your Claude verifies it against the real type registry, writes the Terraform,
-and validates with raptor. Best used inside the Facets module repository.
+`/module <what you want>` generates a complete Facets IaC module: the team's
+fine-tuned model writes every file, your Claude orchestrates — planning,
+reviewing against the type registry, requesting fixes — and validates with
+raptor. Best used inside the Facets module repository.
 
 ## How it works
 
-1. The fine-tune is called **once** and drafts only the `facets.yaml` spec — it
-   never writes Terraform, and it invents `@facets/` type names.
-2. Inside the Facets module repo, your Claude corrects that spec against the
-   real `outputs/` type registry and the input-type schemas, then authors every
-   Terraform file itself. (Outside the repo — or if a required type/attribute
-   isn't registered — it reports the blocker and stops instead of guessing.)
-3. Your Claude validates the result with
-   `raptor create iac-module -f <module-path> --dry-run` and reports what
-   still needs your attention.
+1. The fine-tune **writes every module file** — facets.yaml first, then each
+   Terraform file, one trained-dialect call at a time (~6–12 calls total).
+2. Your Claude orchestrates: it plans from the real `outputs/` type registry
+   and an exemplar module, reviews every generated file against them, and
+   sends fix requests back to the fine-tune. It only writes file content
+   itself if you explicitly ask it to. (Outside the module repo it stops
+   after the facets.yaml draft.)
+3. Your Claude validates with
+   `raptor create iac-module -f <module-path> --dry-run`, routes failures
+   back to the fine-tune, and reports what still needs your attention.
 
 ## Install (once)
 
