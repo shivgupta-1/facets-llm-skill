@@ -1,7 +1,9 @@
 # facets-llm — Claude Code skills for the Facets fine-tuned model
 
-`/module <what you want>` drafts a Facets IaC module (facets.yaml + Terraform)
-using the team's fine-tuned model on RunPod, then validates it with raptor.
+`/module <what you want>` drafts a Facets IaC module via guided multi-step
+generation: the team's fine-tuned model drafts the facets.yaml (its specialty),
+your Claude verifies it against the real type registry, writes the Terraform,
+and validates with raptor. Best used inside the Facets module repository.
 
 ## Install (once)
 
