@@ -1,13 +1,12 @@
 ---
 name: "module"
 title: "Facets Module Generator (fine-tuned LLM)"
-description: "Generate Facets IaC modules (facets.yaml + Terraform) by querying the Facets fine-tuned model served on RunPod. Use when the user runs /module followed by what they want."
-disable-model-invocation: true
-triggers: ["module"]
+description: "Generate Facets IaC modules by querying the Facets fine-tuned model served on RunPod. Use when the user runs /module, OR asks to write/draft/generate/sketch a Facets module, facets.yaml, or module skeleton (any intent/flavor/cloud). Not for generic non-Facets Terraform."
+triggers: ["module", "facets.yaml", "facets module"]
 category: "development"
 tags: ["iac", "terraform", "facets-yaml", "module-development", "llm"]
 icon: "🧱"
-version: "1.1"
+version: "1.2"
 ---
 
 # Facets Module Generator
@@ -36,8 +35,8 @@ export FACETS_LLM_KEY="<team-inference-key>"
 
 ## Procedure
 
-1. **Build the prompt.** Use ONLY the text the user passed after `/module` as the
-   request. Do not add earlier conversation content unless the user explicitly asks
+1. **Build the prompt.** Use the user's module request — the text after `/module`,
+   or their stated ask if they invoked this by describing what they want. Do not add earlier conversation content unless the user explicitly asks
    you to include specific stated requirements — and never include anything that
    looks like credentials or customer data. Keep it short and direct (the model was
    trained on direct instructions, not context dumps). Do NOT paste repository files.
