@@ -6,7 +6,7 @@ triggers: ["module", "facets.yaml", "facets module"]
 category: "development"
 tags: ["iac", "terraform", "facets-yaml", "module-development", "llm"]
 icon: "🧱"
-version: "2.0"
+version: "2.1"
 ---
 
 # Facets Module Generator
@@ -153,6 +153,20 @@ beneath list/map paths); every `local.*` referenced is defined; every
 `var.*` declared; wiring defined in exactly ONE file
 (`grep -En '^\s*(output_attributes|output_interfaces)\s*=' <module>/*.tf`
 must show exactly one assignment each, in the convention file).
+
+**Type-shape consistency (hard requirement — checked on EVERY file as it
+lands, not just at the end):** the facets.yaml `spec` schema is the single
+source of truth for the shape of `var.instance`. Verify structurally:
+arrays in the spec stay `list(...)` in variables.tf, maps stay `map(...)`,
+objects stay `object({...})` — and main.tf/locals.tf access the field the
+same way variables.tf typed it (no `lookup()` on lists, no `[0]` on maps).
+A shape mismatch is a review failure → fix-dialect call on the offending
+file quoting BOTH the spec fragment and the mismatched declaration, e.g.
+"variables.tf types `databases` as `map(object)` but the facets.yaml spec
+declares an array — retype it as `list(object({...}))` to match the spec."
+Also reject any outputs.tf that re-assigns `output_attributes`/
+`output_interfaces` when another file already carries them, or that assigns
+a symbol to itself (circular reference).
 
 ### 3. Assemble and reconcile
 
